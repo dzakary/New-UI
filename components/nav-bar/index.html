@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nav Bar</title>
+    <style>
+      :root {
+        --bar-bg: #e6e6e6;
+        --pill-bg: #ffffff;
+        --icon-color: #1a1a1a;
+        --icon-inactive: #9a9a9a;
+        --active-bg: #c4c4c4;
+      }
+
+      body {
+        display: flex;
+        align-items: flex-start;
+        justify-content: flex-start;
+        margin: 0;
+        padding: 0;
+        background: #f2f2f2;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .nav-bar {
+        display: flex;
+        align-items: center;
+        height: 60px;
+        border-radius: 30px;
+        box-sizing: border-box;
+        background: var(--bar-bg);
+        padding: 5px;
+        gap: 4px;
+      }
+
+      .nav-segment {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        flex: 1;
+        max-width: 150px;
+        height: 100%;
+        appearance: none;
+        background: transparent;
+        border: none;
+        outline: none;
+        border-radius: 26px;
+        font-size: 14px;
+        font-weight: 600;
+        font-family: inherit;
+        letter-spacing: 0.02em;
+        color: var(--icon-color);
+        cursor: pointer;
+        padding: 0 6px;
+        -webkit-tap-highlight-color: transparent;
+        transition: background-color 0.2s ease, box-shadow 0.2s ease, flex-grow 0.2s ease;
+      }
+
+      .nav-segment svg {
+        width: 28px;
+        height: 28px;
+        flex-shrink: 0;
+        stroke: var(--icon-inactive);
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        transition: stroke 0.2s ease, fill 0.2s ease;
+      }
+
+      .nav-segment svg.icon-filled {
+        stroke: none;
+        fill: var(--icon-inactive);
+      }
+
+      .nav-segment img.nav-icon {
+        width: 28px;
+        height: 28px;
+        flex-shrink: 0;
+        object-fit: contain;
+      }
+
+      .nav-segment:hover svg.icon-filled,
+      .nav-segment.hovering svg.icon-filled,
+      .nav-segment.active svg.icon-filled {
+        fill: var(--icon-color);
+      }
+
+      .nav-segment span {
+        white-space: nowrap;
+        max-width: 0;
+        overflow: hidden;
+        opacity: 0;
+        transition: max-width 0.2s ease, opacity 0.15s ease;
+      }
+
+      .nav-segment:hover,
+      .nav-segment.hovering {
+        flex-grow: 1.6;
+        background: var(--pill-bg);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+      }
+
+      .nav-segment:hover svg,
+      .nav-segment.hovering svg {
+        stroke: var(--icon-color);
+      }
+
+      .nav-segment:hover span,
+      .nav-segment.hovering span {
+        max-width: 100px;
+        opacity: 1;
+      }
+
+      .nav-segment:active {
+        background: #d9d9d9;
+        box-shadow: inset 0 2px 2px rgba(0, 0, 0, 0.35);
+        transform: translate(1px, 1px);
+      }
+
+      .nav-segment.active {
+        flex-grow: 1.6;
+        background: var(--active-bg);
+        box-shadow: inset 0 2px 2px rgba(0, 0, 0, 0.35);
+      }
+
+      .nav-segment.active svg {
+        stroke: var(--icon-color);
+      }
+
+      .nav-segment.active span {
+        max-width: 100px;
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="nav-bar" id="navBar"></nav>
+
+    <script>
+      // Fallback snapshot, used only until FileMaker pushes live data via
+      // setNavItems(). Field names match the menu_Nav table's columns so the
+      // JSON built in FileMaker can be handed straight to renderNavBar().
+      let navItems = [
+        { MenuItem: "Home", Parameter: "home", Script: "NAV: Buttons", SortOrder: 1, isTopLevel: 1, isActive: 1, security: "Full Access, Teacher" },
+        { MenuItem: "Search", Parameter: "search", Script: "NAV: Buttons", SortOrder: 2, isTopLevel: 1, isActive: 1, security: "Full Access" },
+        { MenuItem: "Favorites", Parameter: "favorite", Script: "NAV: Buttons", SortOrder: 3, isTopLevel: 1, isActive: 0, security: "Full Access" },
+        { MenuItem: "Settings", Parameter: "settings", Script: "NAV: Buttons", SortOrder: 4, isTopLevel: 1, isActive: 1, security: "Full Access" },
+        { MenuItem: "TEST", Parameter: "test", Script: "NAV: Buttons", SortOrder: 5, isTopLevel: 1, isActive: 1, security: "Full Access, Teacher" },
+        { MenuItem: "Exit", Parameter: "exit", Script: "NAV: Buttons", SortOrder: 6, isTopLevel: 1, isActive: 1, security: "Full Access" },
+      ];
+
+      let currentPrivilegeSet = "Full Access";
+
+      const DEFAULT_ACTIVE_ACTION = "home";
+
+      // Which segment is highlighted. Set by clicking a segment, or by
+      // FileMaker calling setActiveItem() — e.g. from an OnLayoutEnter
+      // script that reads back the global field driving the sub-menu
+      // portal, so the highlight stays correct across layout switches.
+      let currentActiveItem = DEFAULT_ACTIVE_ACTION;
+
+      // Each entry mirrors what's in the row's "icon" container field.
+      // Default entries are hand-drawn stroke icons (24x24); "test" embeds the
+      // actual filled SVG stored in that record's icon container.
+      const ICONS = {
+        home: { viewBox: "0 0 24 24", markup: '<path d="M3 11l9-8 9 8" /><path d="M5 10v10h14V10" />' },
+        search: { viewBox: "0 0 24 24", markup: '<circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />' },
+        favorite: {
+          viewBox: "0 0 24 24",
+          markup: '<path d="M12 21s-7-4.5-9.5-9A5.5 5.5 0 0112 5.5 5.5 5.5 0 0121.5 12c-2.5 4.5-9.5 9-9.5 9z" />',
+        },
+        settings: {
+          viewBox: "0 0 24 24",
+          markup:
+            '<circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 01-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 010-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 014 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 010 4h-.1a1.7 1.7 0 00-1.5 1z" />',
+        },
+        exit: {
+          viewBox: "0 0 24 24",
+          markup: '<path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" />',
+        },
+        test: {
+          viewBox: "0 0 512 512",
+          filled: true,
+          markup:
+            '<path d="M346.5 240H272v-74.5c0-8.8-7.2-16-16-16s-16 7.2-16 16V240h-74.5c-8.8 0-16 6-16 16s7.5 16 16 16H240v74.5c0 9.5 7 16 16 16s16-7.2 16-16V272h74.5c8.8 0 16-7.2 16-16s-7.2-16-16-16z"/><path d="M256 76c48.1 0 93.3 18.7 127.3 52.7S436 207.9 436 256s-18.7 93.3-52.7 127.3S304.1 436 256 436c-48.1 0-93.3-18.7-127.3-52.7S76 304.1 76 256s18.7-93.3 52.7-127.3S207.9 76 256 76m0-28C141.1 48 48 141.1 48 256s93.1 208 208 208 208-93.1 208-208S370.9 48 256 48z"/>',
+        },
+        default: {
+          viewBox: "0 0 24 24",
+          markup:
+            '<circle cx="12" cy="12" r="9" /><path d="M12 17h.01" /><path d="M9.5 9.5a2.5 2.5 0 115 0c0 1.5-1.5 2-2.5 3" />',
+        },
+      };
+
+      const runFmScript = (scriptName, parameter) => {
+        if (window.FileMaker?.PerformScript) {
+          window.FileMaker.PerformScript(scriptName, parameter);
+          return;
+        }
+        console.log(`FileMaker.PerformScript("${scriptName}", ${parameter})`);
+      };
+
+      const navBar = document.getElementById("navBar");
+
+      const SEGMENT_MAX_WIDTH = 150;
+      const SEGMENT_GAP = 4;
+      const BAR_PADDING = 5;
+
+      // Re-renders from whatever is currently in `navItems`, filtered to
+      // `currentPrivilegeSet`. Call renderNavBar() after changing either.
+      const renderNavBar = () => {
+        const visibleItems = navItems
+          .filter(
+            (item) =>
+              Number(item.isTopLevel) === 1 &&
+              Number(item.isActive) === 1 &&
+              item.security?.includes(currentPrivilegeSet)
+          )
+          .sort((a, b) => a.SortOrder - b.SortOrder);
+
+        navBar.innerHTML = "";
+        navBar.style.width = `${
+          visibleItems.length * SEGMENT_MAX_WIDTH + (visibleItems.length - 1) * SEGMENT_GAP + BAR_PADDING * 2
+        }px`;
+
+        const activeAction = visibleItems.some((item) => item.Parameter === currentActiveItem)
+          ? currentActiveItem
+          : visibleItems[0]?.Parameter;
+
+        for (const item of visibleItems) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "nav-segment";
+          if (item.Parameter === activeAction) {
+            button.classList.add("active");
+          }
+          button.setAttribute("aria-label", item.MenuItem);
+          button.dataset.action = item.Parameter;
+          button.dataset.script = item.Script;
+
+          // Prefer the row's own icon (pushed from the "icon" container
+          // field) and fall back to the local lookup only when the row
+          // doesn't have one set. Accepts either a full data URI or a bare
+          // base64 string (assumed to be SVG, since that's what this table
+          // has stored so far — adjust the MIME type below if that changes).
+          let iconMarkup;
+          if (item.icon) {
+            const src = item.icon.startsWith("data:") ? item.icon : `data:image/svg+xml;base64,${item.icon}`;
+            iconMarkup = `<img class="nav-icon" src="${src}" alt="" />`;
+          } else {
+            const icon = ICONS[item.Parameter] ?? ICONS.default;
+            const iconClass = icon.filled ? ' class="icon-filled"' : "";
+            iconMarkup = `<svg viewBox="${icon.viewBox}"${iconClass}>${icon.markup}</svg>`;
+          }
+          button.innerHTML = `${iconMarkup}<span>${item.MenuItem}</span>`;
+          navBar.append(button);
+        }
+
+        const segments = navBar.querySelectorAll(".nav-segment");
+        for (const segment of segments) {
+          segment.addEventListener("click", () => {
+            currentActiveItem = segment.dataset.action;
+            for (const other of segments) {
+              other.classList.remove("active");
+            }
+            segment.classList.add("active");
+
+            const parameter = JSON.stringify({ action: segment.dataset.action });
+            runFmScript(segment.dataset.script, parameter);
+          });
+
+          // Some FileMaker Web Viewer engines don't reliably compute :hover on
+          // mouse movement, so mirror it with a class toggled from mouse/pointer
+          // events instead (covers engines that lack the Pointer Events API too).
+          segment.addEventListener("mouseenter", () => segment.classList.add("hovering"));
+          segment.addEventListener("mouseleave", () => segment.classList.remove("hovering"));
+          segment.addEventListener("pointerenter", () => segment.classList.add("hovering"));
+          segment.addEventListener("pointerleave", () => segment.classList.remove("hovering"));
+        }
+      };
+
+      // Maps the short codes the FileMaker buttons pass ("full" / "teacher")
+      // to the actual privilege set names stored in the "security" field.
+      const PRIVILEGE_SET_CODES = {
+        full: "Full Access",
+        teacher: "Teacher",
+      };
+
+      // Exposed so a native FileMaker button can call it via a
+      // "Perform JavaScript in Web Viewer" script step, e.g.
+      // function name: setPrivilegeSet, parameter: "full" or "teacher".
+      window.setPrivilegeSet = (code) => {
+        const privilegeSet = PRIVILEGE_SET_CODES[code?.toLowerCase()];
+        if (!privilegeSet) {
+          console.log(`setPrivilegeSet: unrecognized code "${code}"`);
+          return;
+        }
+        currentPrivilegeSet = privilegeSet;
+        renderNavBar();
+      };
+
+      // Exposed so a FileMaker script can push live query results in, e.g.
+      // function name: setNavItems, parameter: a JSON array of objects with
+      // MenuItem, Parameter, Script, SortOrder, isTopLevel, isActive, security
+      // — the same columns ExecuteSQL would pull from menu_Nav — plus an
+      // optional "icon" data URI (e.g. "data:image/svg+xml;base64,..."),
+      // since ExecuteSQL can't read container fields; build that part
+      // separately with Base64Encode ( icon ) per record.
+      window.setNavItems = (json) => {
+        let parsed;
+        try {
+          parsed = JSON.parse(json);
+        } catch (error) {
+          console.log(`setNavItems: invalid JSON (${error.message})`);
+          return;
+        }
+        if (!Array.isArray(parsed)) {
+          console.log("setNavItems: expected a JSON array");
+          return;
+        }
+        navItems = parsed;
+        renderNavBar();
+      };
+
+      // Exposed so a native FileMaker button, or an OnLayoutEnter script,
+      // can set which segment is highlighted, e.g. function name:
+      // setActiveItem, parameter: the item's "Parameter" value (e.g. "home").
+      // Call this from OnLayoutEnter on every layout that has this nav bar,
+      // reading back whatever global field drives the sub-menu portal, so
+      // the highlight always matches what's actually selected.
+      window.setActiveItem = (parameter) => {
+        currentActiveItem = parameter;
+        renderNavBar();
+      };
+
+      renderNavBar();
+
+      // Announce readiness instead of making FileMaker guess with a pause.
+      // Have your OnLayoutEnter trigger call a lightweight script that just
+      // kicks off the layout's normal work and returns; do the actual
+      // setActiveItem / setPrivilegeSet call inside "NAV: Ready", which only
+      // runs once this page has actually finished loading.
+      window.addEventListener("load", () => {
+        runFmScript("NAV: Ready", "");
+      });
+    </script>
+  </body>
+</html>

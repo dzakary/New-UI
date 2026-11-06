@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contacts List</title>
+<style>
+  :root{
+    --bg:rgb(229,226,217); --panel:rgb(255,255,255); --ink:rgb(29,35,48); --muted:rgb(107,115,133); --line:rgb(213,209,198);
+    --head:rgb(240,242,246); --hover:rgb(238,243,251); --accent:rgb(47,111,222); --mark:rgb(255,241,168); --stripe:rgb(250,251,252);
+    --row:34px; --ring:rgba(47,111,222,.2);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100vh;margin:0}
+  body{background:var(--bg);color:var(--ink);
+    font:13px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex;flex-direction:column;overflow:hidden}
+
+  .toolbar{display:flex;align-items:center;gap:12px;padding:12px 16px;flex:0 0 auto}
+  .search{position:relative;flex:1 1 auto;max-width:420px;display:flex}
+  .search input{flex:1 1 auto;min-width:0;height:32px;padding:0 30px 0 32px;border:1px solid var(--line);
+    border-radius:8px;background:var(--panel);color:var(--ink);font:inherit;outline:none}
+  .search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--ring)}
+  .search svg{position:absolute;left:10px;top:9px;width:14px;height:14px;stroke:var(--muted)}
+  .search button{position:absolute;right:6px;top:6px;width:20px;height:20px;border:0;border-radius:999px;
+    background:transparent;color:var(--muted);cursor:pointer;display:none;font-size:15px;line-height:20px;padding:0}
+  .search button:hover{background:var(--head)}
+  .search.has-text button{display:block}
+  .count{color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+  .grid{flex:1 1 auto;display:flex;flex-direction:column;margin:0 16px 16px;min-height:0;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .cols{display:grid;grid-template-columns:1fr 1.15fr 1fr .55fr 1.6fr 1fr 1.8fr}
+  .head{flex:0 0 auto;background:rgb(197,188,157);border-bottom:1px solid rgb(173,163,128);user-select:none}
+  .head div{padding:0 10px;height:34px;display:flex;align-items:center;gap:4px;font-weight:600;
+    color:rgb(75,71,68);cursor:pointer;white-space:nowrap}
+  .head div:hover{color:rgb(37,33,32)}
+  .head div.active{color:rgb(37,33,32)}
+  .head .arrow{font-size:10px;width:10px;display:inline-block}
+
+  .viewport{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;position:relative;min-height:0}
+  .spacer{position:relative;width:auto}
+  .row{position:absolute;left:0;right:0;height:var(--row);border-bottom:1px solid var(--line)}
+  .row.alt{background:var(--stripe)}
+  .row:hover{background:var(--hover)}
+  .row div{padding:0 10px;display:flex;align-items:center;overflow:hidden;white-space:nowrap;
+    text-overflow:ellipsis;min-width:0}
+  .row div span{overflow:hidden;text-overflow:ellipsis}
+  mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
+
+  .state{position:absolute;inset:0;z-index:2;background:var(--panel);display:flex;align-items:center;justify-content:center;
+    color:var(--muted);font-size:14px;text-align:center;padding:24px}
+  .state[hidden]{display:none}
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="search" id="searchWrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search" type="text" placeholder="Search name, city, state, company, phone, email…" autocomplete="off" spellcheck="false">
+      <button id="clear" title="Clear (Esc)">×</button>
+    </div>
+    <div class="count" id="count"></div>
+  </div>
+
+  <div class="grid">
+    <div class="head cols" id="head"></div>
+    <div class="viewport" id="viewport">
+      <div class="spacer" id="spacer"></div>
+      <div class="state" id="state">Loading contacts…</div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---- Configuration ------------------------------------------------------ */
+  /* Column order must match the SELECT column order in the FileMaker script. */
+  var COLS = [
+    {key:"FirstName", label:"First Name"},
+    {key:"LastName",  label:"Last Name"},
+    {key:"City",      label:"City"},
+    {key:"State",     label:"State"},
+    {key:"Company",   label:"Company"},
+    {key:"Phone",     label:"Phone"},
+    {key:"Email",     label:"Email"}
+  ];
+  var LOAD_SCRIPT = "WV: Load Contacts";   /* FileMaker script the page calls on startup */
+  var FIELD_SEP = "\x1F";                  /* Char(31) */
+  var ROW_SEP   = "\x1E";                  /* Char(30) */
+  var ROW_H = 34, OVERSCAN = 8;
+
+  /* ---- State -------------------------------------------------------------- */
+  var rows = [];        /* array of arrays (raw values) */
+  var hay = [];         /* lowercase searchable string per row */
+  var sortedIdx = [];   /* all row indices in current sort order */
+  var view = [];        /* filtered indices (subset of sortedIdx, same order) */
+  var sortCol = 1, sortDir = 1;  /* default: Last Name ascending */
+  var terms = [];
+  var collator = new Intl.Collator(undefined, {sensitivity:"base", numeric:true});
+
+  var $ = function(id){ return document.getElementById(id); };
+  var viewport = $("viewport"), spacer = $("spacer"), stateEl = $("state"),
+      countEl = $("count"), input = $("search"), wrap = $("searchWrap"), head = $("head");
+
+  /* ---- Header ------------------------------------------------------------- */
+  COLS.forEach(function(c, i){
+    var d = document.createElement("div");
+    d.innerHTML = '<span>' + c.label + '</span><span class="arrow"></span>';
+    d.addEventListener("click", function(){
+      if (sortCol === i) sortDir = -sortDir; else { sortCol = i; sortDir = 1; }
+      applySort(); applyFilter(); paintHeader();
+    });
+    head.appendChild(d);
+  });
+  function paintHeader(){
+    Array.prototype.forEach.call(head.children, function(d, i){
+      d.classList.toggle("active", i === sortCol);
+      d.querySelector(".arrow").textContent = i === sortCol ? (sortDir === 1 ? "▲" : "▼") : "";
+    });
+  }
+
+  /* ---- Data in ------------------------------------------------------------ */
+  /* Called by FileMaker: Perform JavaScript in Web Viewer [ "loadContacts" ; $data ] */
+  window.loadContacts = function(text){
+    rows = []; hay = [];
+    if (text) {
+      var lines = String(text).split(ROW_SEP);
+      for (var i = 0; i < lines.length; i++) {
+        if (!lines[i]) continue;
+        var f = lines[i].split(FIELD_SEP);
+        while (f.length < COLS.length) f.push("");
+        rows.push(f);
+        hay.push(f.join("\u0001").toLowerCase());
+      }
+    }
+    sortedIdx = new Array(rows.length);
+    for (var j = 0; j < rows.length; j++) sortedIdx[j] = j;
+    applySort(); applyFilter(); paintHeader();
+    return rows.length;
+  };
+  window.loadError = function(msg){
+    rows = []; hay = []; sortedIdx = []; view = [];
+    spacer.style.height = "0px"; spacer.innerHTML = ""; countEl.textContent = "";
+    showState("Couldn't load contacts." + (msg ? "\n" + msg : ""));
+  };
+  /* Called by FileMaker between batches: Perform JavaScript in Web Viewer [ "loadProgress" ; $count ] */
+  window.loadProgress = function(n){
+    showState("Loading contacts… " + Number(n).toLocaleString());
+  };
+
+  /* ---- Sort / filter ------------------------------------------------------ */
+  function applySort(){
+    var c = sortCol, d = sortDir;
+    sortedIdx.sort(function(a, b){
+      var x = rows[a][c], y = rows[b][c];
+      if (!x !== !y) return x ? -1 : 1;          /* blanks always last */
+      var r = collator.compare(x, y);
+      return r ? r * d : a - b;                  /* ties keep original order */
+    });
+  }
+  function applyFilter(){
+    if (!terms.length) view = sortedIdx.slice();
+    else {
+      view = [];
+      for (var i = 0; i < sortedIdx.length; i++) {
+        var h = hay[sortedIdx[i]], ok = true;
+        for (var t = 0; t < terms.length; t++) if (h.indexOf(terms[t]) < 0) { ok = false; break; }
+        if (ok) view.push(sortedIdx[i]);
+      }
+    }
+    spacer.style.height = (view.length * ROW_H) + "px";
+    viewport.scrollTop = 0;
+    countEl.textContent = terms.length
+      ? view.length.toLocaleString() + " of " + rows.length.toLocaleString()
+      : rows.length.toLocaleString() + " contacts";
+    if (!rows.length) showState("No contacts found.");
+    else if (!view.length) showState("No contacts match “" + input.value.trim() + "”.");
+    else showState(null);
+    render(true);
+  }
+
+  /* ---- Virtual render ----------------------------------------------------- */
+  var lastFirst = -1, lastLast = -1;
+  function syncHeader(){
+    /* Rows lose width to the vertical scrollbar; pad the header by the same amount so columns line up. */
+    head.style.paddingRight = (viewport.offsetWidth - viewport.clientWidth) + "px";
+  }
+  function render(force){
+    syncHeader();
+    var top = viewport.scrollTop, h = viewport.clientHeight;
+    var first = Math.max(0, Math.floor(top / ROW_H) - OVERSCAN);
+    var last  = Math.min(view.length, Math.ceil((top + h) / ROW_H) + OVERSCAN);
+    if (!force && first === lastFirst && last === lastLast) return;
+    lastFirst = first; lastLast = last;
+    var html = [];
+    for (var i = first; i < last; i++) {
+      var r = rows[view[i]];
+      html.push('<div class="row cols' + ((i & 1) ? ' alt' : '') + '" style="top:' + (i * ROW_H) + 'px">');
+      for (var c = 0; c < COLS.length; c++) html.push('<div><span>' + mark(r[c]) + '</span></div>');
+      html.push('</div>');
+    }
+    spacer.innerHTML = html.join("");
+  }
+  var ticking = false;
+  viewport.addEventListener("scroll", function(){
+    if (ticking) return; ticking = true;
+    requestAnimationFrame(function(){ ticking = false; render(false); });
+  }, {passive:true});
+  window.addEventListener("resize", function(){ render(true); });
+
+  /* ---- Highlight ---------------------------------------------------------- */
+  function esc(s){ return s.replace(/[&<>"']/g, function(ch){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[ch]; }); }
+  function mark(v){
+    v = v || "";
+    if (!terms.length || !v) return esc(v);
+    var low = v.toLowerCase(), hits = [];
+    terms.forEach(function(t){
+      var p = low.indexOf(t);
+      while (p > -1) { hits.push([p, p + t.length]); p = low.indexOf(t, p + t.length); }
+    });
+    if (!hits.length) return esc(v);
+    hits.sort(function(a,b){ return a[0]-b[0]; });
+    var out = "", pos = 0;
+    hits.forEach(function(hh){
+      if (hh[1] <= pos) return;
+      var s = Math.max(hh[0], pos);
+      out += esc(v.slice(pos, s)) + "<mark>" + esc(v.slice(s, hh[1])) + "</mark>";
+      pos = hh[1];
+    });
+    return out + esc(v.slice(pos));
+  }
+
+  /* ---- Search box --------------------------------------------------------- */
+  var timer;
+  input.addEventListener("input", function(){
+    wrap.classList.toggle("has-text", !!input.value);
+    clearTimeout(timer);
+    timer = setTimeout(function(){
+      terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+      applyFilter();
+    }, 120);
+  });
+  function clearSearch(){ input.value = ""; wrap.classList.remove("has-text"); terms = []; applyFilter(); input.focus(); }
+  $("clear").addEventListener("click", clearSearch);
+  document.addEventListener("keydown", function(e){
+    if (e.key === "Escape" && input.value) clearSearch();
+    else if (e.key === "/" && document.activeElement !== input) { e.preventDefault(); input.focus(); }
+  });
+
+  function showState(msg){
+    if (msg) { stateEl.textContent = msg; stateEl.style.whiteSpace = "pre-line"; stateEl.hidden = false; }
+    else stateEl.hidden = true;
+  }
+
+  /* ---- Boot --------------------------------------------------------------- */
+  /* FileMaker injects window.FileMaker shortly after load, so poll for it. */
+  /* Waits up to 10s for FileMaker. Sample data only when opened as a local file. */
+  paintHeader();
+  var tries = 0;
+  (function boot(){
+    if (window.FileMaker && typeof window.FileMaker.PerformScript === "function") {
+      window.FileMaker.PerformScript(LOAD_SCRIPT, "");
+    } else if (++tries < 200) {
+      setTimeout(boot, 50);
+    } else if (location.protocol === "file:") {
+      window.loadContacts(sampleData(50000));
+    } else {
+      showState("FileMaker didn’t connect to this web viewer.\nCheck “Allow JavaScript to perform FileMaker scripts”.");
+    }
+  })();
+
+  function sampleData(n){
+    function md(a,b){ return a - Math.floor(a / b) * b; }
+    var fn=["Stephen","Colin","Sharon","John","Thomas","Maria","Priya","Liam","Chen","Ava","Noah","Zoë"],
+        ln=["Tittle","Goldberg","Plant","Fernandez","Medina","Nguyen","Patel","O'Brien","Smith","Côté"],
+        ct=[["Calgary","AB","403"],["Edmonton","AB","780"],["Toronto","ON","416"],["Ottawa","ON","613"],["Montréal","QC","514"],["Vancouver","BC","604"]],
+        co=["Spiroll International Corp","M & T Plastics Inc","Floor Fashions Inc","Airways Motel",""],
+        out=[];
+    for (var i=0;i<n;i++){
+      var f=fn[md(i,fn.length)], l=ln[md(i*7,ln.length)], c=ct[md(i*3,ct.length)];
+      out.push([f,l,c[0],c[1],co[md(i*5,co.length)],c[2]+"-"+(200+md(i,800))+"-"+(1000+md(i,9000)),
+        f.toLowerCase()+"@example"+(md(i,97))+".com"].join(FIELD_SEP));
+    }
+    return out.join(ROW_SEP);
+  }
+})();
+</script>
+</body>
+</html>
